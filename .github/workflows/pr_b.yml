@@ -1,4 +1,7 @@
-name: FullWorkflow-PR-b
+name: FullWorkflow-PR-b-Simulation
+
+# Simulation version of pr_b.yml for pull requests
+# Tests Docker build without pushing to registry
 
 on:
   pull_request:
@@ -6,6 +9,8 @@ on:
       - main
     paths:
       - 'model/b/**'
+      - '.github/workflows/pr_b_simulation.yml'
+      - '.github/workflows/docker-simulation.yml'
 
 permissions:
   id-token: write
@@ -15,15 +20,38 @@ permissions:
 jobs:
   style:
     uses: ./.github/workflows/style.yml
+
   tests_b:
     uses: ./.github/workflows/tests.yml
     with:
       src_path: "model/b"
+
   python_style_b:
     uses: ./.github/workflows/python_style.yml
     with:
       src_path: "model/b"
-  docker_b:
-    uses: ./.github/workflows/docker.yml
+
+  docker_simulation_b:
+    name: Build Docker Image (Simulation)
+    uses: ./.github/workflows/docker-simulation.yml
     with:
       build_context: "b"
+      image_tag: "pr-${{ github.event.pull_request.number }}"
+
+  summary:
+    name: PR Summary
+    needs: [style, tests_b, python_style_b, docker_simulation_b]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Generate summary
+        run: |
+          echo "## ✅ Model B PR Checks (Simulation Mode)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Check Results" >> $GITHUB_STEP_SUMMARY
+          echo "- Style checks: ${{ needs.style.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Unit tests: ${{ needs.tests_b.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Python style: ${{ needs.python_style_b.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Docker build: ${{ needs.docker_simulation_b.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "⚠️ **Note**: Docker image built in simulation mode (not pushed)" >> $GITHUB_STEP_SUMMARY

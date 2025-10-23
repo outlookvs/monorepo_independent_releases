@@ -1,4 +1,7 @@
-name: FullWorkflow-Deploy-a
+name: FullWorkflow-Deploy-a-Simulation
+
+# Simulation version of deploy_a.yml that uses docker-simulation.yml
+# Perfect for learning and testing without Azure credentials
 
 on:
   push:
@@ -6,6 +9,8 @@ on:
       - main
     paths:
       - 'model/a/**'
+      - '.github/workflows/deploy_a_simulation.yml'
+      - '.github/workflows/docker-simulation.yml'
 
 permissions:
   contents: write
@@ -16,14 +21,59 @@ permissions:
 jobs:
   style:
     uses: ./.github/workflows/style.yml
+
   tests_a:
     uses: ./.github/workflows/tests.yml
     with:
       src_path: "model/a"
+
   python_style_a:
     uses: ./.github/workflows/python_style.yml
     with:
       src_path: "model/a"
+
   release:
     needs: [style, tests_a, python_style_a]
     uses: ./.github/workflows/release.yaml
+
+  docker_simulation_a:
+    name: Build Docker Image (Simulation)
+    needs: release
+    # Only run if release was created OR if we're testing the workflow
+    if: |
+      needs.release.outputs.a-release_created == 'true' ||
+      contains(github.event.head_commit.message, '[test-docker]')
+    uses: ./.github/workflows/docker-simulation.yml
+    with:
+      image_tag: ${{ needs.release.outputs.a-tag_name || 'test' }}
+      build_context: "a"
+
+  summary:
+    name: Deployment Summary
+    needs: [release, docker_simulation_a]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Generate summary
+        run: |
+          echo "## 🚀 Model A Deployment Summary (Simulation Mode)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Workflow Results" >> $GITHUB_STEP_SUMMARY
+          echo "- Style checks: ${{ needs.style.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Unit tests: ${{ needs.tests_a.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Python style: ${{ needs.python_style_a.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Release: ${{ needs.release.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Docker build: ${{ needs.docker_simulation_a.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ needs.release.outputs.a-release_created }}" = "true" ]; then
+            echo "### 🎉 Release Created" >> $GITHUB_STEP_SUMMARY
+            echo "- **Tag**: ${{ needs.release.outputs.a-tag_name }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **Docker image built**: Yes (simulation)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### ℹ️ No Release" >> $GITHUB_STEP_SUMMARY
+            echo "No releasable commits found for model/a" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "⚠️ **Note**: Running in simulation mode. No images pushed to registry." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "To test Docker build without release, add \`[test-docker]\` to commit message." >> $GITHUB_STEP_SUMMARY

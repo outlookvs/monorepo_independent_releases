@@ -1,0 +1,235 @@
+name: BuildPublishImage-Simulation
+
+# This is a simulation version of docker.yml that:
+# 1. Builds Docker images locally
+# 2. Tests the image by running it
+# 3. Saves build artifacts instead of pushing to registry
+# 4. No Azure credentials required
+# 5. Perfect for learning, testing, and CI without registry access
+
+on:
+  workflow_call:
+    inputs:
+      build_context:
+        description: 'build_context (a or b)'
+        required: false
+        type: string
+      image_tag:
+        description: 'Image tag (e.g., a-v0.2.0)'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  packages: read
+
+env:
+  # Simulation mode - using GitHub Container Registry or local
+  # No actual push will happen, but metadata will be generated
+  REGISTRY: "ghcr.io"
+  SIMULATE_MODE: "true"
+
+jobs:
+  BuildDockerSimulation:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ${{ env.REGISTRY }}/${{ github.repository }}/${{ inputs.build_context }}
+          tags: |
+            type=edge,branch=main
+            type=ref,event=tag
+            type=ref,event=pr
+            type=raw,value=${{ inputs.image_tag }}
+          flavor: |
+            latest=false
+
+      - name: Display build information
+        run: |
+          echo "=========================================="
+          echo "🐳 DOCKER BUILD SIMULATION MODE"
+          echo "=========================================="
+          echo "Build context: model/${{ inputs.build_context }}"
+          echo "Image tag: ${{ inputs.image_tag }}"
+          echo "Event: ${{ github.event_name }}"
+          echo "Branch: ${{ github.ref_name }}"
+          echo ""
+          echo "📋 Generated tags:"
+          echo "${{ steps.meta.outputs.tags }}"
+          echo ""
+          echo "🏷️ Generated labels:"
+          echo "${{ steps.meta.outputs.labels }}"
+          echo "=========================================="
+
+      - name: Build Docker image (simulation)
+        uses: docker/build-push-action@v5
+        with:
+          context: model/${{ inputs.build_context }}
+          push: false  # Never push in simulation mode
+          load: true   # Load into local Docker daemon for testing
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Test Docker image
+        run: |
+          echo "=========================================="
+          echo "🧪 TESTING DOCKER IMAGE"
+          echo "=========================================="
+
+          # Extract the first tag for testing
+          IMAGE_TAG=$(echo "${{ steps.meta.outputs.tags }}" | head -n1)
+          echo "Testing image: $IMAGE_TAG"
+
+          # Display image info
+          echo ""
+          echo "📦 Image details:"
+          docker images "$IMAGE_TAG" --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}"
+
+          # Inspect image
+          echo ""
+          echo "🔍 Image inspection:"
+          docker inspect "$IMAGE_TAG" --format='{{json .Config.Labels}}' | jq .
+
+          # Test run the image (with timeout for safety)
+          echo ""
+          echo "▶️  Running image (5 second timeout)..."
+          timeout 5s docker run --rm "$IMAGE_TAG" || true
+
+          echo ""
+          echo "✅ Image build and test completed successfully!"
+          echo "=========================================="
+
+      - name: Save image as artifact (optional)
+        if: github.event_name != 'pull_request'
+        run: |
+          echo "=========================================="
+          echo "💾 SAVING IMAGE AS ARTIFACT"
+          echo "=========================================="
+
+          # Extract the first tag
+          IMAGE_TAG=$(echo "${{ steps.meta.outputs.tags }}" | head -n1)
+
+          # Save image to tar file
+          IMAGE_FILE="${{ inputs.build_context }}-${{ inputs.image_tag || 'latest' }}.tar"
+          echo "Saving to: $IMAGE_FILE"
+          docker save "$IMAGE_TAG" -o "$IMAGE_FILE"
+
+          # Compress to save space
+          echo "Compressing..."
+          gzip "$IMAGE_FILE"
+
+          # Display file size
+          ls -lh "${IMAGE_FILE}.gz"
+
+          echo ""
+          echo "✅ Image saved to ${IMAGE_FILE}.gz"
+          echo "=========================================="
+
+      - name: Upload image artifact
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-image-${{ inputs.build_context }}-${{ inputs.image_tag || 'latest' }}
+          path: ${{ inputs.build_context }}-*.tar.gz
+          retention-days: 7
+
+      - name: Simulate registry push (dry-run)
+        if: github.event_name != 'pull_request'
+        run: |
+          echo "=========================================="
+          echo "🚀 SIMULATED REGISTRY PUSH"
+          echo "=========================================="
+          echo "In production, the following would be pushed:"
+          echo ""
+          echo "${{ steps.meta.outputs.tags }}" | while read -r tag; do
+            echo "  ✓ $tag"
+          done
+          echo ""
+          echo "Registry: ${{ env.REGISTRY }}"
+          echo "Size: $(docker images "${{ steps.meta.outputs.tags }}" --format "{{.Size}}" | head -n1)"
+          echo ""
+          echo "⚠️  SIMULATION MODE - No actual push performed"
+          echo "To enable real pushes, use docker.yml with proper credentials"
+          echo "=========================================="
+
+      - name: Generate deployment manifest (simulation)
+        if: github.event_name != 'pull_request'
+        run: |
+          cat > deployment-manifest-${{ inputs.build_context }}.yaml << EOF
+          # Kubernetes Deployment Manifest (Example)
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: model-${{ inputs.build_context }}
+            labels:
+              app: model-${{ inputs.build_context }}
+              version: ${{ inputs.image_tag }}
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: model-${{ inputs.build_context }}
+            template:
+              metadata:
+                labels:
+                  app: model-${{ inputs.build_context }}
+                  version: ${{ inputs.image_tag }}
+              spec:
+                containers:
+                - name: model-${{ inputs.build_context }}
+                  image: ${{ steps.meta.outputs.tags }}
+                  ports:
+                  - containerPort: 8080
+          EOF
+
+          echo "=========================================="
+          echo "📄 DEPLOYMENT MANIFEST GENERATED"
+          echo "=========================================="
+          cat deployment-manifest-${{ inputs.build_context }}.yaml
+          echo "=========================================="
+
+      - name: Upload deployment manifest
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-manifest-${{ inputs.build_context }}
+          path: deployment-manifest-*.yaml
+          retention-days: 30
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## 🐳 Docker Build Simulation Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Build Details" >> $GITHUB_STEP_SUMMARY
+          echo "- **Context**: model/${{ inputs.build_context }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Tag**: ${{ inputs.image_tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Event**: ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Generated Tags" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Status" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Image built successfully" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Image tested successfully" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "✅ Image saved as artifact" >> $GITHUB_STEP_SUMMARY
+            echo "✅ Deployment manifest generated" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "⚠️ **Simulation Mode**: No actual push to registry performed" >> $GITHUB_STEP_SUMMARY

@@ -1,0 +1,29 @@
+name: FullWorkflow-Deploy-a
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'model/a/**'
+
+permissions:
+  contents: write
+  pull-requests: write
+  id-token: write
+  packages: write
+
+jobs:
+  style:
+    uses: ./.github/workflows/style.yml
+  tests_a:
+    uses: ./.github/workflows/tests.yml
+    with:
+      src_path: "model/a"
+  python_style_a:
+    uses: ./.github/workflows/python_style.yml
+    with:
+      src_path: "model/a"
+  release:
+    needs: [style, tests_a, python_style_a]
+    uses: ./.github/workflows/release.yaml
